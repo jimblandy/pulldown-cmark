@@ -144,7 +144,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                             body: ItemBody::TaskListMarker(is_checked),
                         });
                 }
-            } else if line_start.scan_blockquote_marker() {
+                continue;
+            }
+            if line_start.scan_blockquote_marker() {
                 self.finish_list(start_ix);
                 self.tree.append(Item {
                     start: container_start,
@@ -152,9 +154,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     body: ItemBody::BlockQuote,
                 });
                 self.tree.push();
-            } else {
-                break;
+                continue
             }
+
+            break;
         }
 
         let ix = start_ix + line_start.bytes_scanned();
