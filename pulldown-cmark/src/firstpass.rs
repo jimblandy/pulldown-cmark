@@ -57,10 +57,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let mut ix = 0;
         while ix < self.text.len() {
             ix = self.parse_block(ix);
+            eprint!("JIMB: spine:");
+            for &item in self.tree.walk_spine() {
+                eprint!(" {:?}", &self.tree[item].item.body);
+            }
+            eprintln!();
         }
         for _ in 0..self.tree.spine_len() {
-            self.pop(ix);
+            self.pop(ix, "run");
         }
+        eprintln!("JIMB: tree:\n{:?}", self.tree);
         (self.tree, self.allocs)
     }
 
@@ -69,13 +75,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let bytes = self.text.as_bytes();
         let mut line_start = LineStart::new(&bytes[start_ix..]);
 
+        eprintln!("JIMB: parse_block at {start_ix}");
         let i = scan_containers(
             &self.tree,
             &mut line_start,
             self.options.has_gfm_footnotes(),
         );
         for _ in i..self.tree.spine_len() {
-            self.pop(start_ix);
+            self.pop(start_ix, "parse_block");
         }
 
         if self.options.contains(Options::ENABLE_OLD_FOOTNOTES) {
@@ -83,7 +90,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if let Some(node_ix) = self.tree.peek_up() {
                 if let ItemBody::FootnoteDefinition(..) = self.tree[node_ix].item.body {
                     if self.last_line_blank {
-                        self.pop(start_ix);
+                        self.pop(start_ix, "parse_block");
                     }
                 }
             }
@@ -132,6 +139,8 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     body: ItemBody::ListItem(indent),
                 });
                 self.tree.push();
+                eprintln!("      > ListItem (parse_block)");
+
                 if let Some(n) = scan_blank_line(&bytes[after_marker_index..]) {
                     self.begin_list_item = Some(after_marker_index + n);
                     return after_marker_index + n;
@@ -146,15 +155,30 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 }
                 continue;
             }
+
             if line_start.scan_blockquote_marker() {
-                self.finish_list(start_ix);
+                self.finish_list(start_ix, "parse_block > finish_list");
                 self.tree.append(Item {
                     start: container_start,
                     end: 0, // will get set later
                     body: ItemBody::BlockQuote,
                 });
                 self.tree.push();
-                continue
+                eprintln!("      > BlockQuote (parse_block)");
+                continue;
+            }
+
+            if self.options.contains(Options::ENABLE_DESCRIPTION_LISTS) {
+                // The block preceding a description list description must be an
+                // ordinary paragraph, which becomes the term.
+                if let Some(cur) = self.tree.cur() {
+                    if self.tree[cur].item.body == ItemBody::Paragraph {
+                        if let Some(indent) = line_start.scan_description_marker() {
+                            self.start_description(container_start, cur, indent);
+                            continue;
+                        }
+                    }
+                }
             }
 
             break;
@@ -179,10 +203,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     }
                 }
             }
+            eprintln!("      returning for blank line (parse_block)");
             return ix + n;
         }
 
-        self.finish_list(start_ix);
+        self.finish_list(start_ix, "parse_block > finish_list");
 
         // Save `remaining_space` here to avoid needing to backtrack `line_start` for HTML blocks
         let remaining_space = line_start.remaining_space();
@@ -324,7 +349,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             ix = next_ix;
         }
 
-        self.pop(ix);
+        self.pop(ix, "parse_table");
         Some(ix)
     }
 
@@ -381,7 +406,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
 
         if let (Some(cur), 0) = (old_cur, cells) {
-            self.pop(ix);
+            self.pop(ix, "parse_table_row_inner");
             self.tree[cur].next = None;
             return None;
         }
@@ -406,7 +431,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.tree[cell_ix].next = None;
         }
 
-        self.pop(ix);
+        self.pop(ix, "parse_table_row_inner");
 
         Some((ix, row_ix))
     }
@@ -433,7 +458,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         if scan_paragraph_interrupt_no_table(
             &bytes[ix..],
             current_container,
-            self.options.has_gfm_footnotes(),
+            self.options,
             &self.tree,
         ) {
             return None;
@@ -451,6 +476,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             body: ItemBody::Paragraph,
         });
         self.tree.push();
+        eprintln!("      > Paragraph (parse_block > parse_paragraph");
 
         if let Some(item) = self.next_paragraph_task {
             self.tree.append(item);
@@ -535,7 +561,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
         }
 
-        self.pop(ix);
+        self.pop(ix, "parse_block > parse_paragraph");
         ix
     }
 
@@ -1007,7 +1033,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             remaining_space = line_start.remaining_space();
             indent = 0;
         }
-        self.pop(end_ix);
+        self.pop(end_ix, "parse_html_block_type_1_to_5");
         ix
     }
 
@@ -1056,7 +1082,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             remaining_space = line_start.remaining_space();
             indent = 0;
         }
-        self.pop(end_ix);
+        self.pop(end_ix, "parse_html_block_type_6_or_7");
         ix
     }
 
@@ -1111,7 +1137,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             self.tree[child].next = None;
             self.tree[child].item.end = last_nonblank_ix;
         }
-        self.pop(end_ix);
+        self.pop(end_ix, "parse_indented_code_block");
         ix
     }
 
@@ -1146,7 +1172,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             if n_containers < self.tree.spine_len() {
                 // this line will get parsed again as not being part of the code
                 // if it's blank, it should be parsed as a blank line
-                self.pop(ix);
+                self.pop(ix, "parse_fenced_code_block");
                 return ix;
             }
             line_start.scan_space(indent);
@@ -1156,7 +1182,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 if let Some(n) = scan_closing_code_fence(&bytes[close_ix..], fence_ch, n_fence_char)
                 {
                     ix = close_ix + n;
-                    self.pop(ix);
+                    self.pop(ix, "parse_fenced_code_block");
                     // try to read trailing whitespace or it will register as a completely blank line
                     return ix + scan_blank_line(&bytes[ix..]).unwrap_or(0);
                 }
@@ -1216,7 +1242,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             ix = next_ix;
         }
 
-        self.pop(ix);
+        self.pop(ix, "parse_metadata_block");
 
         // try to read trailing whitespace or it will register as a completely blank line
         ix + scan_blank_line(&bytes[ix..]).unwrap_or(0)
@@ -1272,9 +1298,10 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 
     /// Pop a container, setting its end.
-    fn pop(&mut self, ix: usize) {
+    fn pop(&mut self, ix: usize, caller: &'static str) {
         let cur_ix = self.tree.pop().unwrap();
         self.tree[cur_ix].item.end = ix;
+        eprintln!("      < {:?} ({} > pop)", self.tree[cur_ix].item.body, caller);
         if let ItemBody::List(true, _, _) = self.tree[cur_ix].item.body {
             surgerize_tight_list(&mut self.tree, cur_ix);
             self.begin_list_item = None;
@@ -1283,11 +1310,11 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
     /// Close a list if it's open. Also set loose if last line was blank
     /// and end current list if it's a lone, empty item
-    fn finish_list(&mut self, ix: usize) {
+    fn finish_list(&mut self, ix: usize, caller: &'static str) {
         self.finish_empty_list_item();
         if let Some(node_ix) = self.tree.peek_up() {
             if let ItemBody::List(_, _, _) = self.tree[node_ix].item.body {
-                self.pop(ix);
+                self.pop(ix, caller);
             }
         }
         if self.last_line_blank {
@@ -1306,7 +1333,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 // A list item can begin with at most one blank line.
                 if let Some(node_ix) = self.tree.peek_up() {
                     if let ItemBody::ListItem(_) = self.tree[node_ix].item.body {
-                        self.pop(begin_list_item);
+                        self.pop(begin_list_item, "finish_empty_list_item");
                     }
                 }
             }
@@ -1317,6 +1344,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     /// Continue an existing list or start a new one if there's not an open
     /// list that matches.
     fn continue_list(&mut self, start: usize, ch: u8, index: u64) {
+        eprintln!("JIMB: continue_list ch = {ch:?}, index = {index:?}");
         self.finish_empty_list_item();
         if let Some(node_ix) = self.tree.peek_up() {
             if let ItemBody::List(ref mut is_tight, existing_ch, _) = self.tree[node_ix].item.body {
@@ -1329,7 +1357,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 }
             }
             // TODO: this is not the best choice for end; maybe get end from last list item.
-            self.finish_list(start);
+            self.finish_list(start, "parse_block > continue_list > finish_list");
         }
         self.tree.append(Item {
             start,
@@ -1337,6 +1365,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             body: ItemBody::List(true, ch, index),
         });
         self.tree.push();
+        eprintln!("      > List(true, {ch:?}, {index:?}) (parse_block > continue_list)");
         self.last_line_blank = false;
     }
 
@@ -1477,12 +1506,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             return None;
         }
         i += 1;
-        self.finish_list(start);
+        self.finish_list(start, "parse_block > parse_footnote > finish_list");
         if self.options.has_gfm_footnotes() {
             if let Some(node_ix) = self.tree.peek_up() {
                 if let ItemBody::FootnoteDefinition(..) = self.tree[node_ix].item.body {
                     // finish previous footnote if it's still open
-                    self.pop(start);
+                    self.pop(start, "parse_footnote");
                 }
             }
             i += scan_whitespace_no_nl(&bytes[i..]);
@@ -1735,8 +1764,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
     /// Checks whether we should break a paragraph on the given input.
     fn scan_paragraph_interrupt(&self, bytes: &[u8], current_container: bool) -> bool {
-        let gfm_footnote = self.options.has_gfm_footnotes();
-        if scan_paragraph_interrupt_no_table(bytes, current_container, gfm_footnote, &self.tree) {
+        if scan_paragraph_interrupt_no_table(bytes, current_container, self.options, &self.tree) {
             return true;
         }
         // pulldown-cmark allows heavy tables, that have a `|` on the header row,
@@ -1849,6 +1877,37 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         });
         (content_end, attrs)
     }
+
+    fn start_description(
+        &mut self,
+        start: usize,
+        mut term: TreeIndex,
+        indent: usize
+    ) {
+        eprintln!("JIMB: start_description: tree at {:?}:\n{:?}", self.tree.cur(), self.tree);
+        eprintln!("JIMB: peek_up: {:?}", self.tree.peek_up().map(|up| self.tree[up].item));
+
+        // If we're not already within a description list, start one.
+        if !self.tree.peek_up().is_some_and(|up| self.tree[up].item.body == ItemBody::DescriptionList) {
+            // Mutate the Paragraph at term into a DescriptionList > Paragraph structure.
+            // We'll move the Paragraph under a DescriptionListTerm next.
+            let paragraph = self.tree[term].item;
+            term = self.tree.interpose_parent(Item {
+                body: ItemBody::DescriptionList,
+                .. paragraph
+            });
+        }
+
+        // Turn the Paragraph into a DescriptionListTerm.
+        self.tree[term].item.body = ItemBody::DescriptionListTerm;
+        self.tree.append(Item {
+            start,
+            end: 0, // will be filled in by `FirstPass::pop`
+            body: ItemBody::DescriptionListDescription(indent),
+        });
+        self.tree.push();
+        eprintln!("JIMB: start_description: final tree:\n{:?}", self.tree);
+    }
 }
 
 /// Scanning modes for `Parser`'s `parse_line` method.
@@ -1891,9 +1950,11 @@ fn count_header_cols(
 fn scan_paragraph_interrupt_no_table(
     bytes: &[u8],
     current_container: bool,
-    gfm_footnote: bool,
+    options: Options,
     tree: &Tree<Item>,
 ) -> bool {
+    let gfm_footnote = options.has_gfm_footnotes();
+    let description_list = options.contains(Options::ENABLE_DESCRIPTION_LISTS);
     scan_eol(bytes).is_some()
         || scan_hrule(bytes).is_ok()
         || scan_atx_heading(bytes).is_some()
@@ -1917,6 +1978,8 @@ fn scan_paragraph_interrupt_no_table(
                 tree.is_in_table(),
             )
             .map_or(false, |(len, _)| bytes.get(2 + len) == Some(&b':')))
+        || (description_list
+            && scan_description_marker(bytes))
 }
 
 /// Assumes `text_bytes` is preceded by `<`.

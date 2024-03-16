@@ -461,6 +461,9 @@ bitflags::bitflags! {
         /// literal text [^4]. In old syntax, it creates a dangling link.
         /// ```
         const ENABLE_OLD_FOOTNOTES = (1 << 9) | (1 << 2);
+
+        /// Enable description lists.
+        const ENABLE_DESCRIPTION_LISTS = (1 << 10);
     }
 }
 

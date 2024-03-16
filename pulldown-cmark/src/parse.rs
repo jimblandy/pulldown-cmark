@@ -97,6 +97,10 @@ pub(crate) enum ItemBody {
     FootnoteDefinition(CowIndex),
     MetadataBlock(MetadataBlockKind),
 
+    DescriptionList,
+    DescriptionListTerm,
+    DescriptionListDescription(usize), // indent level
+
     // Tables
     Table(AlignmentIndex),
     TableHead,
@@ -134,6 +138,9 @@ impl ItemBody {
                 | ItemBody::TableRow
                 | ItemBody::TableCell
                 | ItemBody::Heading(..)
+                | ItemBody::DescriptionList
+                | ItemBody::DescriptionListTerm
+                | ItemBody::DescriptionListDescription(_)
         )
     }
 }
@@ -1092,7 +1099,7 @@ pub(crate) fn scan_containers(
                     break;
                 }
             }
-            ItemBody::ListItem(indent) => {
+            ItemBody::ListItem(indent) | ItemBody::DescriptionListDescription(indent) => {
                 let save = line_start.clone();
                 if !line_start.scan_space(indent) && !line_start.is_at_eol() {
                     *line_start = save;

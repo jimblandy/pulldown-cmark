@@ -226,7 +226,7 @@ impl<'a> LineStart<'a> {
 
     /// Scan a list marker.
     ///
-    /// Return value is the character, the start index, and the indent in spaces.
+    /// Return value is the character, the list number, and the indent in spaces.
     /// For ordered list markers, the character will be one of b'.' or b')'. For
     /// bullet list markers, it will be one of b'-', b'+', or b'*'.
     pub(crate) fn scan_list_marker(&mut self) -> Option<(u8, u64, usize)> {
@@ -334,6 +334,26 @@ impl<'a> LineStart<'a> {
             return None;
         }
         Some(is_checked)
+    }
+
+    /// Scan a description list's description marker.
+    ///
+    /// Return value is the indent in spaces.
+    pub(crate) fn scan_description_marker(&mut self) -> Option<usize> {
+        let save = self.clone();
+        let indent = self.scan_space_upto(4);
+        if indent < 4 && self.ix < self.bytes.len() {
+            let c = self.bytes[self.ix];
+            if c == b':' || c == b'~' {
+                self.ix += 1;
+                let post_indent = self.scan_space_upto(4);
+                if (1..4).contains(&post_indent) {
+                    return Some(indent + 1 + post_indent);
+                }
+            }
+        }
+        *self = save;
+        None
     }
 
     pub(crate) fn bytes_scanned(&self) -> usize {
@@ -1426,6 +1446,10 @@ pub(crate) fn scan_inline_html_processing(
     }
     scan_guard.processing = ix;
     None
+}
+
+pub(crate) fn scan_description_marker(bytes: &[u8]) -> bool {
+    matches!(bytes, [b':' | b'~', b' ', ..])
 }
 
 #[cfg(test)]

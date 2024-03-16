@@ -130,6 +130,30 @@ impl<T: Default> Tree<T> {
         Some(ix)
     }
 
+    /// Interpose a new parent over the current node.
+    ///
+    /// Mutate the current node in place, moving its contents into a
+    /// new child node. Move focus to this new child, so that appended
+    /// nodes become its siblings, and return its index.
+    pub(crate) fn interpose_parent(&mut self, item: T) -> TreeIndex {
+        let parent_ix = self.cur.unwrap();
+        assert!(self[parent_ix].next.is_none()); // append would trash this anyway
+
+        // Copy the current node to a fresh node, and replace its spot
+        // with the parent.
+        let child_new_ix = TreeIndex::new(self.nodes.len());
+        let child = std::mem::replace(&mut self[parent_ix], Node {
+            child: Some(child_new_ix),
+            next: None,
+            item,
+        });
+        self.nodes.push(child);
+
+        self.spine.push(parent_ix);
+        self.cur = Some(child_new_ix);
+        child_new_ix
+    }
+
     /// Look at the parent node.
     pub(crate) fn peek_up(&self) -> Option<TreeIndex> {
         self.spine.last().copied()
