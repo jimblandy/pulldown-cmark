@@ -1908,6 +1908,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree.push();
         eprintln!("JIMB: start_description: final tree:\n{:?}", self.tree);
     }
+
+    fn end_description_list(&mut self, para: Option<TreeIndex>) {
+    }
 }
 
 /// Scanning modes for `Parser`'s `parse_line` method.
